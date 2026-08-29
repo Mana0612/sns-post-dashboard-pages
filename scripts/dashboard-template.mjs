@@ -23,6 +23,45 @@ function formatDateTime(value) {
   }).format(date);
 }
 
+function normalizeDateKey(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value ?? ''));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function jstDateKey(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function periodDates(data) {
+  return {
+    start: normalizeDateKey(data.period?.start_jst ?? data.period?.start_date),
+    end: normalizeDateKey(data.period?.end_jst ?? data.period?.end_date),
+  };
+}
+
+function postCardId(groupId) {
+  const safe = String(groupId ?? '')
+    .normalize('NFKC')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 96);
+  return `post-${safe || 'unknown'}`;
+}
+
 function formatElapsed(hours) {
   if (!Number.isFinite(hours)) return '経過時間不明';
   if (hours < 1) return `投稿後 ${Math.max(1, Math.round(hours * 60))}分`;
@@ -59,12 +98,6 @@ function linkToPost(platform, url, label, className) {
   const safeUrl = safePostUrl(platform, url);
   if (!safeUrl) return `<span class="${className}">${escapeHtml(label)}</span>`;
   return `<a class="${className}" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}<span class="external-mark" aria-hidden="true">↗</span></a>`;
-}
-
-function titleLinkToPost(platform, url, label) {
-  const safeUrl = safePostUrl(platform, url);
-  if (!safeUrl) return `<span class="post-title-link">${escapeHtml(label)}</span>`;
-  return `<a class="post-title-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
 }
 
 function renderPostLinks(row) {
@@ -180,20 +213,130 @@ function renderPostCard(row) {
     .flatMap((post) => post?.parts?.map((part) => part.text) ?? [])
     .join(' ');
   const searchText = `${row.representative_text} ${partTexts} ${presence.label}`.toLowerCase();
-  const primaryPlatform = row.x ? 'x' : 'threads';
-  const primaryPost = row.x ?? row.threads;
-  return `<article class="post-card" data-presence="${escapeHtml(row.presence_type)}" data-search="${escapeHtml(searchText)}" data-timestamp="${Number.isFinite(timestamp) ? timestamp : 0}" data-reaction="${Number.isFinite(reactionScore) ? reactionScore : -1}">
+  return `<article class="post-card" id="${postCardId(row.group_id)}" data-presence="${escapeHtml(row.presence_type)}" data-search="${escapeHtml(searchText)}" data-timestamp="${Number.isFinite(timestamp) ? timestamp : 0}" data-reaction="${Number.isFinite(reactionScore) ? reactionScore : -1}">
     <div class="post-topline">
       <span class="presence ${presence.className}">${escapeHtml(presence.label)}</span>
       ${matchNote ? `<span class="match-note">${escapeHtml(matchNote)}</span>` : ''}
     </div>
-    <h2 class="post-copy">${titleLinkToPost(primaryPlatform, primaryPost?.url, row.text_preview)}</h2>
+    <h2 class="post-copy">${escapeHtml(row.text_preview)}</h2>
     ${renderPostLinks(row)}
     <div class="platform-grid">
       ${platformPanel('x', row.x)}
       ${platformPanel('threads', row.threads)}
     </div>
   </article>`;
+}
+
+function monthKeysBetween(start, end) {
+  if (!start || !end || start > end) return [];
+  const result = [];
+  let year = Number(start.slice(0, 4));
+  let month = Number(start.slice(5, 7));
+  const endYear = Number(end.slice(0, 4));
+  const endMonth = Number(end.slice(5, 7));
+  for (let guard = 0; guard < 120 && (year < endYear || (year === endYear && month <= endMonth)); guard += 1) {
+    result.push(`${year}-${String(month).padStart(2, '0')}`);
+    month += 1;
+    if (month === 13) {
+      year += 1;
+      month = 1;
+    }
+  }
+  return result;
+}
+
+function calendarMarkerGroups(rows) {
+  const groups = new Map();
+  const add = (date, kind, row) => {
+    if (!date) return;
+    const key = `${date}|${kind}`;
+    if (!groups.has(key)) groups.set(key, { date, kind, posts: [] });
+    groups.get(key).posts.push({
+      id: postCardId(row.group_id),
+      text: String(row.text_preview ?? row.representative_text ?? '投稿'),
+    });
+  };
+
+  for (const row of rows) {
+    const xDate = jstDateKey(row.x?.posted_at);
+    const threadsDate = jstDateKey(row.threads?.posted_at);
+    if (xDate && threadsDate && xDate === threadsDate) add(xDate, 'both', row);
+    else {
+      add(xDate, 'x', row);
+      add(threadsDate, 'threads', row);
+    }
+  }
+  return [...groups.values()];
+}
+
+function renderCalendarMarker(group) {
+  const baseLabel = group.kind === 'both' ? '(X,T)' : group.kind === 'x' ? '(X)' : '(T)';
+  const count = group.posts.length;
+  const visibleLabel = count > 1 ? `${baseLabel}×${count}` : baseLabel;
+  if (count === 1) {
+    const post = group.posts[0];
+    return `<a class="calendar-marker ${group.kind}" href="#${post.id}" aria-label="${escapeHtml(`${group.date} ${baseLabel} ${post.text}へ移動`)}">${escapeHtml(visibleLabel)}</a>`;
+  }
+  const ids = group.posts.map((post) => post.id).join(' ');
+  return `<button class="calendar-marker ${group.kind}" type="button" data-calendar-groups="${escapeHtml(ids)}" aria-label="${escapeHtml(`${group.date} ${baseLabel} ${count}件を一覧表示`)}">${escapeHtml(visibleLabel)}</button>`;
+}
+
+function renderCalendar(data) {
+  const bounds = periodDates(data);
+  const markerGroups = calendarMarkerGroups(data.rows);
+  const groupsByDate = new Map();
+  for (const group of markerGroups) {
+    if (!groupsByDate.has(group.date)) groupsByDate.set(group.date, []);
+    groupsByDate.get(group.date).push(group);
+  }
+  const markerDates = markerGroups.map((group) => group.date).sort();
+  const start = bounds.start ?? markerDates[0] ?? null;
+  const end = bounds.end ?? markerDates.at(-1) ?? start;
+  const months = monthKeysBetween(start, end);
+  for (const date of markerDates) {
+    const month = date.slice(0, 7);
+    if (!months.includes(month)) months.push(month);
+  }
+  months.sort();
+  const activeMonth = (bounds.end?.slice(0, 7) && months.includes(bounds.end.slice(0, 7)))
+    ? bounds.end.slice(0, 7)
+    : months.at(-1);
+  const kindOrder = { both: 0, x: 1, threads: 2 };
+
+  const tabs = months.map((month) => {
+    const [year, monthNumber] = month.split('-').map(Number);
+    const active = month === activeMonth;
+    return `<button class="calendar-month-tab" type="button" data-calendar-target="${month}" aria-controls="calendar-${month}" aria-pressed="${active}">${year}年${monthNumber}月</button>`;
+  }).join('');
+
+  const panels = months.map((month) => {
+    const [year, monthNumber] = month.split('-').map(Number);
+    const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+    const leading = new Date(Date.UTC(year, monthNumber - 1, 1)).getUTCDay();
+    const cells = Array.from({ length: leading }, () => '<div class="calendar-spacer" aria-hidden="true"></div>');
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const date = `${month}-${String(day).padStart(2, '0')}`;
+      const outside = (bounds.start && date < bounds.start) || (bounds.end && date > bounds.end);
+      const markers = (groupsByDate.get(date) ?? [])
+        .sort((left, right) => kindOrder[left.kind] - kindOrder[right.kind])
+        .map(renderCalendarMarker)
+        .join('');
+      cells.push(`<div class="calendar-day${outside ? ' outside-period' : ''}" data-date="${date}"><span class="calendar-day-number">${day}</span>${outside ? '<span class="outside-label">期間外</span>' : markers}</div>`);
+    }
+    while (cells.length % 7) cells.push('<div class="calendar-spacer" aria-hidden="true"></div>');
+    return `<section class="calendar-month" id="calendar-${month}" data-calendar-month="${month}"${month === activeMonth ? '' : ' hidden'} role="tabpanel">
+      <div class="calendar-weekdays" aria-hidden="true"><span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span></div>
+      <div class="calendar-grid">${cells.join('')}</div>
+    </section>`;
+  }).join('');
+
+  return `<section class="calendar-panel" aria-label="投稿カレンダー">
+    <div class="calendar-heading"><div><p class="section-kicker">POSTING CALENDAR</p><h2>投稿日カレンダー</h2></div><div class="calendar-tabs" role="tablist" aria-label="表示月">${tabs}</div></div>
+    <p class="calendar-copy">同じ日にXとThreadsへ投稿した組は（X,T）、単独投稿は（X）または（T）で表示。連投・本人リプライは元投稿の日に1件として数えます。</p>
+    ${panels}
+    <div class="calendar-legend"><span class="both">（X,T）両方</span><span class="x">（X）Xのみ</span><span class="threads">（T）Threadsのみ</span></div>
+    <p class="calendar-note">※（X,T）には確認済みの組と類似照合候補が含まれます。複数件の印を押すと該当投稿だけを一覧表示します。</p>
+  </section>`;
 }
 
 function comparisonWins(rows) {
@@ -217,7 +360,9 @@ export function renderDashboard(data) {
   const xShare = wins.comparable ? (wins.x / wins.comparable) * 100 : 0;
   const threadsShare = wins.comparable ? (wins.threads / wins.comparable) * 100 : 0;
   const sourceByPlatform = Object.fromEntries((data.sources ?? []).map((source) => [source.platform, source]));
-  const period = `${escapeHtml(data.period?.start_jst ?? '2026-07-30')} 〜 ${escapeHtml(data.period?.end_jst ?? '2026-08-29')}`;
+  const bounds = periodDates(data);
+  const period = `${escapeHtml(bounds.start ?? '2026-07-30')} 〜 ${escapeHtml(bounds.end ?? '2026-08-29')}`;
+  const calendar = renderCalendar(data);
   const cards = data.rows.map(renderPostCard).join('\n');
 
   return `<!doctype html>
@@ -263,6 +408,36 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
 .win-count{text-align:right;font-variant-numeric:tabular-nums}
 .definition{margin:13px 0 0;padding-top:12px;border-top:1px solid var(--line);color:#6b7780;font-size:11px;line-height:1.65}
 .notice{margin-top:12px;padding:12px 14px;border-left:4px solid #d9a441;border-radius:8px 13px 13px 8px;background:#fff8e8;color:#634b19;font-size:11px;line-height:1.65}
+.calendar-panel{margin-top:12px;padding:15px 10px 12px;border:1px solid rgba(19,36,48,.09);border-radius:18px;background:#fff;box-shadow:var(--shadow)}
+.calendar-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;padding:0 4px}
+.calendar-heading h2{margin:2px 0 0;font-size:18px;letter-spacing:-.02em}
+.calendar-tabs{display:flex;flex:none;gap:5px}
+.calendar-month-tab{min-height:32px;padding:5px 9px;border:1px solid var(--line);border-radius:9px;background:#f6f8f9;color:#58656e;font-size:10px;font-weight:800;cursor:pointer}
+.calendar-month-tab[aria-pressed="true"]{border-color:#173848;background:#173848;color:#fff}
+.calendar-month-tab:focus-visible,.calendar-marker:focus-visible{outline:3px solid rgba(39,114,140,.24);outline-offset:2px}
+.calendar-copy{margin:8px 4px 11px;color:var(--muted);font-size:10px;line-height:1.65}
+.calendar-month[hidden]{display:none}
+.calendar-weekdays,.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
+.calendar-weekdays{margin-bottom:3px;color:#72808a;font-size:9px;font-weight:800;text-align:center}
+.calendar-weekdays span:first-child{color:#b54b4b}
+.calendar-weekdays span:last-child{color:#426fa2}
+.calendar-day,.calendar-spacer{min-width:0;min-height:70px;border-radius:8px}
+.calendar-day{display:flex;flex-direction:column;gap:3px;padding:4px 3px;border:1px solid #e4e9ec;background:#fbfcfd}
+.calendar-day-number{align-self:flex-start;color:#53616b;font-size:9px;font-weight:850;font-variant-numeric:tabular-nums;line-height:1}
+.calendar-day.outside-period{border-color:#eef1f3;background:#f4f6f7;color:#a5adb2}
+.calendar-day.outside-period .calendar-day-number{color:#adb5ba}
+.outside-label{margin:auto 0;color:#a5adb2;font-size:7px;text-align:center;white-space:nowrap}
+.calendar-marker{display:block;width:100%;min-width:0;margin:0;padding:3px 1px;border:0;border-radius:5px;color:#fff;font-size:8px;font-weight:900;line-height:1.2;text-align:center;text-decoration:none;white-space:nowrap;cursor:pointer}
+.calendar-marker.both{background:var(--both)}
+.calendar-marker.x{background:var(--x)}
+.calendar-marker.threads{background:var(--threads)}
+.calendar-marker.is-active{box-shadow:0 0 0 3px rgba(217,164,65,.42)}
+.calendar-legend{display:flex;flex-wrap:wrap;gap:5px 12px;margin:10px 4px 0;color:#596670;font-size:9px;font-weight:750}
+.calendar-legend span::before{content:"";display:inline-block;width:7px;height:7px;margin-right:4px;border-radius:2px;background:currentColor}
+.calendar-legend .both{color:var(--both)}
+.calendar-legend .x{color:var(--x)}
+.calendar-legend .threads{color:var(--threads)}
+.calendar-note{margin:6px 4px 0;color:#7b858d;font-size:8px;line-height:1.6}
 .controls{position:sticky;z-index:5;top:0;margin:18px -16px 14px;padding:10px 16px 12px;border-bottom:1px solid rgba(30,45,54,.08);background:rgba(247,249,250,.94);backdrop-filter:blur(13px)}
 .filters{display:flex;gap:7px;overflow:auto;padding-bottom:2px;scrollbar-width:none}
 .filters::-webkit-scrollbar{display:none}
@@ -278,7 +453,7 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
 .result-line{display:flex;justify-content:space-between;gap:12px;margin:0 1px 9px;color:var(--muted);font-size:11px}
 #result-count{font-weight:800;color:#34434d}
 .post-list{display:grid;gap:12px}
-.post-card{min-width:0;padding:15px;border:1px solid rgba(19,36,48,.09);border-radius:18px;background:#fff;box-shadow:0 7px 22px rgba(30,45,56,.055)}
+.post-card{min-width:0;padding:15px;scroll-margin-top:116px;border:1px solid rgba(19,36,48,.09);border-radius:18px;background:#fff;box-shadow:0 7px 22px rgba(30,45,56,.055)}
 .post-card[hidden]{display:none}
 .post-topline{display:flex;align-items:center;flex-wrap:wrap;gap:7px}
 .presence,.match-note{display:inline-flex;align-items:center;min-height:24px;padding:3px 9px;border-radius:999px;font-size:10px;font-weight:800}
@@ -288,10 +463,6 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
 .presence.threads-only{background:#eee9ff;color:#5636c5}
 .match-note{padding-inline:0;background:none;color:#7b858d;font-weight:650}
 .post-copy{margin:9px 0 8px;font-size:14px;font-weight:720;line-height:1.65;overflow-wrap:anywhere}
-.post-title-link{color:inherit;text-decoration:underline;text-decoration-color:#aab6bd;text-decoration-thickness:1px;text-underline-offset:4px}
-.post-title-link::after{content:" ↗";color:#78848d;font-size:.82em;font-weight:700}
-.post-title-link:hover{text-decoration-color:currentColor}
-.post-title-link:focus-visible{border-radius:5px;outline:3px solid rgba(39,114,140,.24);outline-offset:2px}
 .post-links{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 13px}
 .post-open-link{display:inline-flex;min-height:34px;align-items:center;gap:5px;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:#f8fafb;color:#26343e;font-size:11px;font-weight:850;text-decoration:none}
 .post-open-link.x{border-color:#cfd6da;background:#f1f3f4;color:#111820}
@@ -343,9 +514,9 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
 .empty-state{display:none;padding:34px 16px;border:1px dashed #bdc7cd;border-radius:16px;color:#68757e;text-align:center;font-size:13px}
 .empty-state.visible{display:block}
 .footnote{margin:22px 2px 0;color:#77828a;font-size:10px;line-height:1.7}
-@media(min-width:680px){.shell{padding:34px 24px 76px}.summary-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.platform-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.controls{margin-inline:-24px;padding-inline:24px}.post-card{padding:19px}.post-copy{font-size:15px}}
+@media(min-width:680px){.shell{padding:34px 24px 76px}.summary-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.platform-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.calendar-panel{padding:18px}.calendar-day,.calendar-spacer{min-height:82px}.calendar-marker{font-size:9px}.controls{margin-inline:-24px;padding-inline:24px}.post-card{padding:19px}.post-copy{font-size:15px}}
 @media(min-width:960px){.top-grid{display:grid;grid-template-columns:1.1fr .9fr;align-items:stretch;gap:12px}.insight{margin-top:0}.summary-grid{height:100%}.summary-card{display:grid;align-content:center}.metrics{grid-template-columns:repeat(5,minmax(0,1fr))}}
-@media(max-width:360px){.tool-row{grid-template-columns:1fr}.sort{height:40px}.metrics{grid-template-columns:1fr 1fr}.summary-card{padding:13px}.summary-card strong{font-size:26px}}
+@media(max-width:360px){.tool-row{grid-template-columns:1fr}.sort{height:40px}.metrics{grid-template-columns:1fr 1fr}.summary-card{padding:13px}.summary-card strong{font-size:26px}.calendar-panel{padding-inline:7px}.calendar-heading{align-items:flex-start;flex-direction:column}.calendar-tabs{align-self:stretch}.calendar-month-tab{flex:1}.calendar-day,.calendar-spacer{min-height:66px}.calendar-grid,.calendar-weekdays{gap:2px}.calendar-marker{font-size:7.5px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.controls{backdrop-filter:none}}
 </style>
 </head>
@@ -383,6 +554,8 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
 
   <div class="notice">これは1回取得した累計値のスナップショットです。投稿ごとに「投稿後何時間で取得したか」を表示しますが、成長曲線にするには同じ投稿を複数回取得する必要があります。</div>
 
+  ${calendar}
+
   <section class="controls" aria-label="投稿の絞り込み">
     <div class="filters">
       <button class="filter" type="button" data-filter="all" aria-pressed="true">すべて ${formatNumber(summary.total_groups)}</button>
@@ -409,11 +582,16 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
   const list = document.querySelector('#post-list');
   const filters = [...document.querySelectorAll('[data-filter]')];
   const summaryFilters = [...document.querySelectorAll('[data-summary-filter]')];
+  const calendarTabs = [...document.querySelectorAll('[data-calendar-target]')];
+  const calendarMonths = [...document.querySelectorAll('[data-calendar-month]')];
+  const calendarGroupButtons = [...document.querySelectorAll('[data-calendar-groups]')];
+  const calendarPostLinks = [...document.querySelectorAll('.calendar-marker[href^="#post-"]')];
   const search = document.querySelector('#post-search');
   const sort = document.querySelector('#post-sort');
   const count = document.querySelector('#result-count');
   const empty = document.querySelector('#empty-state');
   let activeFilter = 'all';
+  let calendarGroupFilter = null;
 
   function apply() {
     const query = search.value.normalize('NFKC').trim().toLowerCase();
@@ -425,7 +603,8 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
     for (const card of ordered) {
       const matchesType = activeFilter === 'all' || card.dataset.presence === activeFilter;
       const matchesQuery = !query || card.dataset.search.includes(query);
-      card.hidden = !(matchesType && matchesQuery);
+      const matchesCalendar = !calendarGroupFilter || calendarGroupFilter.has(card.id);
+      card.hidden = !(matchesType && matchesQuery && matchesCalendar);
       if (!card.hidden) visible += 1;
       list.append(card);
     }
@@ -434,13 +613,40 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
     for (const button of filters) button.setAttribute('aria-pressed', String(button.dataset.filter === activeFilter));
   }
 
+  function clearCalendarGroupFilter() {
+    calendarGroupFilter = null;
+    for (const marker of calendarGroupButtons) marker.classList.remove('is-active');
+  }
+
   function selectFilter(value) {
+    clearCalendarGroupFilter();
     activeFilter = value;
     apply();
     document.querySelector('.controls').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  for (const button of filters) button.addEventListener('click', () => { activeFilter = button.dataset.filter; apply(); });
+  function selectCalendarMonth(value) {
+    for (const month of calendarMonths) month.hidden = month.dataset.calendarMonth !== value;
+    for (const button of calendarTabs) button.setAttribute('aria-pressed', String(button.dataset.calendarTarget === value));
+  }
+
+  for (const button of calendarTabs) button.addEventListener('click', () => selectCalendarMonth(button.dataset.calendarTarget));
+  for (const button of calendarGroupButtons) button.addEventListener('click', () => {
+    clearCalendarGroupFilter();
+    calendarGroupFilter = new Set(button.dataset.calendarGroups.split(' ').filter(Boolean));
+    button.classList.add('is-active');
+    activeFilter = 'all';
+    search.value = '';
+    apply();
+    document.querySelector('.controls').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  for (const link of calendarPostLinks) link.addEventListener('click', () => {
+    clearCalendarGroupFilter();
+    activeFilter = 'all';
+    search.value = '';
+    apply();
+  });
+  for (const button of filters) button.addEventListener('click', () => { clearCalendarGroupFilter(); activeFilter = button.dataset.filter; apply(); });
   for (const button of summaryFilters) button.addEventListener('click', () => selectFilter(button.dataset.summaryFilter));
   search.addEventListener('input', apply);
   sort.addEventListener('change', apply);

@@ -86,10 +86,25 @@ async function main() {
       title: document.querySelector('h1')?.textContent,
       counts: [...document.querySelectorAll('.summary-card strong')].map((node) => Number(node.textContent)),
       cards: document.querySelectorAll('.post-card').length,
+      titleLinks: document.querySelectorAll('.post-title-link').length,
+      postOpenLinks: document.querySelectorAll('a.post-open-link').length,
+      cardsWithoutPostOpenLinks: [...document.querySelectorAll('.post-card')]
+        .filter((card) => !card.querySelector('a.post-open-link')).length,
       treeNodes: document.querySelectorAll('.thread-node').length,
       platformLinks: document.querySelectorAll('a.platform-link').length,
       partLinks: document.querySelectorAll('a.part-link').length,
+      calendarMonths: document.querySelectorAll('[data-calendar-month]').length,
+      visibleCalendarMonths: document.querySelectorAll('[data-calendar-month]:not([hidden])').length,
+      calendarMarkers: document.querySelectorAll('.calendar-marker').length,
+      maxCalendarMarkersPerDay: Math.max(0, ...[...document.querySelectorAll('.calendar-day')]
+        .map((day) => day.querySelectorAll('.calendar-marker').length)),
+      calendarCardIds: [...new Set([...document.querySelectorAll('.calendar-marker')].flatMap((marker) => {
+        if (marker.matches('a[href^="#post-"]')) return [marker.getAttribute('href').slice(1)];
+        return (marker.dataset.calendarGroups ?? '').split(' ').filter(Boolean);
+      }))],
       unsafeLinks: [...document.querySelectorAll('a[href]')].filter((link) => {
+        const rawHref = link.getAttribute('href') ?? '';
+        if (/^#post-[A-Za-z0-9_-]+$/.test(rawHref)) return !document.getElementById(rawHref.slice(1));
         try {
           const url = new URL(link.href);
           return url.protocol !== 'https:'
@@ -117,9 +132,17 @@ async function main() {
       initial.counts.length !== 4 ||
       bothCount + xOnlyCount + threadsOnlyCount !== totalCount ||
       initial.cards !== totalCount ||
+      initial.titleLinks !== 0 ||
+      initial.postOpenLinks < totalCount ||
+      initial.cardsWithoutPostOpenLinks !== 0 ||
       initial.treeNodes < 2 ||
       initial.platformLinks < totalCount ||
       initial.partLinks < 2 ||
+      initial.calendarMonths !== 2 ||
+      initial.visibleCalendarMonths !== 1 ||
+      initial.calendarMarkers < 1 ||
+      initial.maxCalendarMarkersPerDay > 3 ||
+      initial.calendarCardIds.length !== totalCount ||
       initial.unsafeLinks.length > 0 ||
       initial.overflow ||
       xOnlyVisible !== xOnlyCount ||

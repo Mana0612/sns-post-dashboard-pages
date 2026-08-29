@@ -161,14 +161,61 @@ test("XのセルフリプライとThreads分割投稿を同じカード内のツ
   assert.equal((html.match(/class="post-card"/g) ?? []).length, 3);
 });
 
-test("投稿タイトルと明示ボタンから各媒体の実投稿へ移動できる", () => {
+test("投稿タイトルはリンクにせず、明示ボタンから各媒体の実投稿へ移動できる", () => {
   const html = renderDashboard(sample);
-  assert.match(html, /<h2 class="post-copy"><a class="post-title-link" href="https:\/\/x\.com\/example\/status\/1" target="_blank" rel="noopener noreferrer">両方にある投稿<\/a><\/h2>/);
+  assert.match(html, /<h2 class="post-copy">両方にある投稿<\/h2>/);
+  assert.doesNotMatch(html, /class="post-title-link"/);
   assert.match(html, /class="post-open-link x" href="https:\/\/x\.com\/example\/status\/1" target="_blank" rel="noopener noreferrer">Xで投稿を見る/);
   assert.match(html, /class="post-open-link threads" href="https:\/\/www\.threads\.com\/@example\/post\/1" target="_blank" rel="noopener noreferrer">Threadsで投稿を見る/);
-  assert.equal((html.match(/class="post-title-link"/g) ?? []).length, 3);
   assert.equal((html.match(/class="post-open-link x"/g) ?? []).length, 2);
   assert.equal((html.match(/class="post-open-link threads"/g) ?? []).length, 2);
+});
+
+test("月切替カレンダーで同日クロスポストをX,T、単独投稿をXまたはTで表示する", () => {
+  const html = renderDashboard(sample);
+  assert.match(html, /aria-label="投稿カレンダー"/);
+  assert.match(html, /data-calendar-target="2026-07"/);
+  assert.match(html, /data-calendar-target="2026-08"/);
+  assert.match(html, /data-calendar-month="2026-07" hidden/);
+  assert.match(html, /data-calendar-month="2026-08"/);
+  assert.match(html, /data-date="2026-08-28"[\s\S]*class="calendar-marker both" href="#post-grp_001"[\s\S]*\(X,T\)/);
+  assert.match(html, /data-date="2026-08-27"[\s\S]*class="calendar-marker x" href="#post-grp_002"[\s\S]*\(X\)/);
+  assert.match(html, /data-date="2026-08-26"[\s\S]*class="calendar-marker threads" href="#post-grp_003"[\s\S]*\(T\)/);
+  assert.equal((html.match(/class="calendar-marker both"/g) ?? []).length, 1);
+  assert.equal((html.match(/class="calendar-marker x"/g) ?? []).length, 1);
+  assert.equal((html.match(/class="calendar-marker threads"/g) ?? []).length, 1);
+  assert.match(html, /id="post-grp_001"/);
+});
+
+test("XとThreadsのJST投稿日が異なる場合は別々の日へ表示する", () => {
+  const crossDay = structuredClone(sample);
+  crossDay.period = { start_jst: "2026-08-01", end_jst: "2026-08-31" };
+  crossDay.summary = { total_groups: 1, both: 1, x_only: 0, threads_only: 0 };
+  crossDay.rows = [structuredClone(sample.rows[0])];
+  crossDay.rows[0].x.posted_at = "2026-08-28T14:30:00Z";
+  crossDay.rows[0].threads.posted_at = "2026-08-28T15:30:00Z";
+
+  const html = renderDashboard(crossDay);
+  assert.match(html, /data-date="2026-08-28"[\s\S]*class="calendar-marker x" href="#post-grp_001"/);
+  assert.match(html, /data-date="2026-08-29"[\s\S]*class="calendar-marker threads" href="#post-grp_001"/);
+  assert.doesNotMatch(html, /class="calendar-marker both"/);
+});
+
+test("同じ日の同区分は件数付きの1マークへ集約し、取得期間外の日を区別する", () => {
+  const busyDay = structuredClone(sample);
+  busyDay.period = { start_date: "2026-08-26", end_date: "2026-08-29" };
+  const duplicate = structuredClone(sample.rows[0]);
+  duplicate.group_id = "grp_004";
+  duplicate.text_preview = "同日の別クロスポスト";
+  duplicate.representative_text = "同日の別クロスポスト";
+  busyDay.rows = [busyDay.rows[0], duplicate];
+  busyDay.summary = { total_groups: 2, both: 2, x_only: 0, threads_only: 0 };
+
+  const html = renderDashboard(busyDay);
+  assert.equal((html.match(/class="calendar-marker both"/g) ?? []).length, 1);
+  assert.match(html, /data-calendar-groups="post-grp_001 post-grp_004"[\s\S]*\(X,T\)×2/);
+  assert.match(html, /class="calendar-day outside-period" data-date="2026-08-01"/);
+  assert.match(html, /2026-08-26 〜 2026-08-29/);
 });
 
 test("投稿リンクは対応媒体のHTTPS URLだけを許可する", () => {
@@ -186,6 +233,12 @@ test("スマホ幅で区分フィルターと検索が動き、横にはみ出�
   const page = await browser.newPage();
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
   await page.setContent(renderDashboard(sample), { waitUntil: "domcontentloaded" });
+
+  assert.equal(await page.$eval('.calendar-month:not([hidden])', (node) => node.dataset.calendarMonth), '2026-08');
+  await page.click('[data-calendar-target="2026-07"]');
+  assert.equal(await page.$eval('.calendar-month:not([hidden])', (node) => node.dataset.calendarMonth), '2026-07');
+  await page.click('[data-calendar-target="2026-08"]');
+  assert.equal(await page.$eval('.calendar-marker.both', (node) => node.getAttribute('href')), '#post-grp_001');
 
   await page.click('[data-filter="x_only"]');
   await page.waitForFunction(() => document.querySelectorAll(".post-card:not([hidden])").length === 1);
