@@ -1,0 +1,13 @@
+{
+  "name": "sns-post-dashboard-pages",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/encrypt-page.mjs --input '../SNS横断ダッシュボード_ダッシュボードUI版.html' --output docs/index.html --password-stdin",
+    "test": "node --test --experimental-test-coverage"
+  },
+  "devDependencies": {
+    "puppeteer": "25.9.0"
+  }
+}
