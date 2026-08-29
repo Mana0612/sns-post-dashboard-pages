@@ -69,7 +69,7 @@ body.unlocked .gate{display:none}
   </form>
   <p class="privacy">入力内容は外部へ送信されません。このページ内で暗号化データを復号します。</p>
 </main>
-<iframe id="dashboard-frame" title="SNS投稿ダッシュボード" sandbox="allow-scripts allow-same-origin" hidden></iframe>
+<iframe id="dashboard-frame" title="SNS投稿ダッシュボード" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" hidden></iframe>
 <script id="encrypted-payload" type="application/json">${safeJson(payload)}</script>
 <script>
 (() => {

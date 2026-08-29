@@ -61,7 +61,8 @@ test("単一の公開用HTMLを生成し、平文とパスワードを残さな�
 
   const outputHtml = await readFile(outputPath, "utf8");
   assert.match(outputHtml, /パスワードを入力/);
-  assert.match(outputHtml, /sandbox="allow-scripts allow-same-origin"/);
+  assert.match(outputHtml, /sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"/);
+  assert.doesNotMatch(outputHtml, /allow-same-origin/);
   assert.equal(outputHtml.includes("PLAINTEXT_SENTINEL_7f3c"), false);
   assert.equal(outputHtml.includes(TEST_PASSWORD), false);
 

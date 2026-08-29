@@ -5,3 +5,5 @@ node_modules/
 source/
 test-output/
 *.tmp-*
+README.md.bak-20260829-before-real-data
+package.json.bak-20260829-before-real-data
