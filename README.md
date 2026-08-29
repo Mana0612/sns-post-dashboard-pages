@@ -32,16 +32,20 @@ GitHub Pagesの公開元は `main` ブランチの `/docs` にします。
 ## 再生成・再ビルド
 
 ```bash
+npm run collect:threads-views
 npm run generate:dashboard
 npm test
 npm run build
 npm run qa:built
 ```
 
+- `npm run collect:threads-views`: Threadsの公開投稿詳細ページを低速で1件ずつ開き、表示回数を別JSONへ保存（ログイン・アカウント操作なし）
 - `npm run generate:dashboard`: 比較JSONから平文HTMLを再生成
 - `npm test`: 暗号化、モバイルUI、公開ファイル構成を検証
 - `npm run build`: パスワードを端末から非表示入力し、`docs/index.html` を再生成
 - `npm run qa:built`: 実際の暗号化済みページをスマホ幅で復号し、件数・フィルター・外部通信・画面幅を確認
+
+Threadsの表示回数は `../SNS横断ダッシュボード_実データ/2026-08-29_Threads_views_public_ui.json` に分離して保存し、HTML生成時だけ比較データへ合成します。元の比較JSONは上書きしません。公開詳細ページに値がない投稿は補完せず「未取得」のまま表示します。
 
 パスワードをコマンドライン引数、ファイル、Git履歴へ入れないでください。
 

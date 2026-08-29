@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "collect:threads-views": "node scripts/collect-threads-views.mjs",
     "generate:dashboard": "node scripts/generate-dashboard.mjs",
     "build": "node scripts/encrypt-page.mjs --input '../SNS横断ダッシュボード_X_Threads1ヶ月実データ版.html' --output docs/index.html --password-stdin",
     "qa:calendar": "node scripts/qa-calendar-preview.mjs",

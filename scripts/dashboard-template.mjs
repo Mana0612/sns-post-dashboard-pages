@@ -69,12 +69,18 @@ function formatElapsed(hours) {
   return `投稿後 ${(hours / 24).toFixed(hours < 168 ? 1 : 0)}日`;
 }
 
-function metric(label, value, { unavailableLabel = '取得不可', suffix = '' } = {}) {
+function metric(label, value, {
+  unavailableLabel = '取得不可',
+  suffix = '',
+  displayValue = null,
+  note = '',
+} = {}) {
   const available = Number.isFinite(value);
+  const formatted = displayValue || `${formatNumber(value)}${suffix}`;
   return `<div class="metric">
     <span>${escapeHtml(label)}</span>
-    <strong${available ? '' : ' class="unavailable"'}>${available ? `${formatNumber(value)}${suffix}` : '—'}</strong>
-    ${available ? '' : `<small>${escapeHtml(unavailableLabel)}</small>`}
+    <strong${available ? '' : ' class="unavailable"'}>${available ? escapeHtml(formatted) : '—'}</strong>
+    ${available ? (note ? `<small>${escapeHtml(note)}</small>` : '') : `<small>${escapeHtml(unavailableLabel)}</small>`}
   </div>`;
 }
 
@@ -168,6 +174,14 @@ function platformPanel(platform, post) {
       <div class="empty-copy"><strong>投稿なし</strong><span>この媒体には対応する投稿がありません</span></div>
     </section>`;
   }
+  const threadsView = platform === 'threads';
+  const viewCapturedAt = threadsView ? formatDateTime(post.views_captured_at) : '—';
+  const viewNote = threadsView && viewCapturedAt !== '—'
+    ? `${viewCapturedAt}取得${post.views_is_approximate ? '・概算' : ''}`
+    : threadsView && post.views_is_approximate ? '画面表示（概算）' : '';
+  const viewUnavailableLabel = threadsView && post.views_collection_status === 'error'
+    ? '未取得（投稿ページを確認できず）'
+    : '未取得（投稿詳細で確認可能）';
   return `<section class="platform-panel ${platform}">
     <div class="platform-heading">
       ${linkToPost(platform, post.url, label, 'platform-link')}
@@ -178,7 +192,11 @@ function platformPanel(platform, post) {
       ${metric('いいね', post.likes)}
       ${metric('返信', post.replies)}
       ${metric('再投稿', post.reposts)}
-      ${metric('表示', post.views, { unavailableLabel: '取得不可（画面非表示）' })}
+      ${metric('表示', post.views, {
+        unavailableLabel: threadsView ? viewUnavailableLabel : '取得不可',
+        displayValue: threadsView ? post.views_display : null,
+        note: viewNote,
+      })}
       ${metric('1,000人あたり反応', post.reactions_per_1000_followers)}
     </div>
     ${renderParts(platform, post)}
@@ -364,6 +382,11 @@ export function renderDashboard(data) {
   const period = `${escapeHtml(bounds.start ?? '2026-07-30')} 〜 ${escapeHtml(bounds.end ?? '2026-08-29')}`;
   const calendar = renderCalendar(data);
   const cards = data.rows.map(renderPostCard).join('\n');
+  const threadsViewsEnrichment = data.threads_views_enrichment;
+  const threadsViewsCapturedAt = threadsViewsEnrichment?.collected_at;
+  const threadsViewsCoverage = threadsViewsEnrichment
+    ? `${formatNumber(threadsViewsEnrichment.collected_count)}/${formatNumber(threadsViewsEnrichment.attempted_count)}件`
+    : null;
 
   return `<!doctype html>
 <html lang="ja">
@@ -529,6 +552,7 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
     <div class="source-line">
       <span>${period}</span>
       <span>取得 ${escapeHtml(formatDateTime(data.captured_at))}</span>
+      ${threadsViewsCapturedAt ? `<span>Threads表示 ${escapeHtml(threadsViewsCoverage)}・${escapeHtml(formatDateTime(threadsViewsCapturedAt))}取得</span>` : ''}
       <span class="source-pill"><i class="source-dot"></i>X ${escapeHtml(sourceByPlatform.X?.follower_count_display ?? '—')}人</span>
       <span class="source-pill"><i class="source-dot threads"></i>Threads ${escapeHtml(sourceByPlatform.Threads?.follower_count_display ?? '—')}人</span>
     </div>
@@ -548,7 +572,7 @@ h1{margin:0;font-size:clamp(25px,6vw,40px);line-height:1.18;letter-spacing:-.035
       <p class="insight-copy">いいね＋返信＋再投稿で比較できた ${formatNumber(wins.comparable)}件</p>
       <div class="win-row"><span>Xが上</span><div class="bar"><span style="width:${xShare.toFixed(2)}%"></span></div><span class="win-count">${formatNumber(wins.x)}</span></div>
       <div class="win-row threads"><span>Threadsが上</span><div class="bar"><span style="width:${threadsShare.toFixed(2)}%"></span></div><span class="win-count">${formatNumber(wins.threads)}</span></div>
-      <p class="definition">共通反応＝いいね＋返信＋再投稿。表示回数はThreadsのプロフィール画面で確認できないため、媒体間比較には使っていません。</p>
+      <p class="definition">共通反応＝いいね＋返信＋再投稿。Threadsの表示回数は投稿詳細画面から取得し、「万」表記は概算として扱います。取得時点が異なるため、この媒体間比較には使っていません。</p>
     </section>
   </div>
 

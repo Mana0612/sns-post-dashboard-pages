@@ -96,7 +96,7 @@ const sample = {
   ],
 };
 
-test("実データの区分・取得不可・投稿なしを明示した自己完結HTMLを生成する", () => {
+test("実データの区分・未取得・投稿なしを明示した自己完結HTMLを生成する", () => {
   const html = renderDashboard(sample);
   assert.match(html, /直近1か月分の取得データです/);
   assert.doesNotMatch(html, /1か月サンプル/);
@@ -104,7 +104,7 @@ test("実データの区分・取得不可・投稿なしを明示した自己�
   assert.match(html, /Xのみ[\s\S]*1/);
   assert.match(html, /Threadsのみ[\s\S]*1/);
   assert.match(html, /投稿なし/);
-  assert.match(html, /取得不可/);
+  assert.match(html, /未取得（投稿詳細で確認可能）/);
   assert.match(html, /フォロワー1,000人あたり/);
   assert.doesNotMatch(html, /<script[^>]+src=/i);
   assert.doesNotMatch(html, /<link[^>]+href=/i);
@@ -144,6 +144,28 @@ test("欠損値・類似照合・同率比較も壊さず表示する", () => {
   assert.match(html, /投稿後 18分/);
   assert.match(html, /取得 —/);
   assert.match(html, /Xが上[\s\S]*1/);
+});
+
+test("Threadsの表示回数は投稿詳細の元表記を使い、丸め値だけ概算と明示する", () => {
+  const enriched = structuredClone(sample);
+  enriched.rows[0].threads.views = 21000;
+  enriched.rows[0].threads.views_display = "2.1万";
+  enriched.rows[0].threads.views_is_approximate = true;
+  enriched.rows[0].threads.views_captured_at = "2026-08-29T12:34:00.000Z";
+  enriched.rows[0].threads.unavailable_metrics = ["bookmarks"];
+
+  const html = renderDashboard(enriched);
+  assert.match(html, /<span>表示<\/span>[\s\S]*<strong>2\.1万<\/strong>[\s\S]*8\/29 21:34取得・概算/);
+  assert.match(html, /Threadsの表示回数は投稿詳細画面から取得/);
+  assert.doesNotMatch(html, /プロフィール画面で確認できないため/);
+  assert.match(html, /未取得（投稿詳細で確認可能）/);
+});
+
+test("投稿ページへ移動できないThreadsは未取得理由を分けて表示する", () => {
+  const unavailable = structuredClone(sample);
+  unavailable.rows[2].threads.views_collection_status = "error";
+  const html = renderDashboard(unavailable);
+  assert.match(html, /未取得（投稿ページを確認できず）/);
 });
 
 test("XのセルフリプライとThreads分割投稿を同じカード内のツリーで表示し、各投稿へ移動できる", () => {
